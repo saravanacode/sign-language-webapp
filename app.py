@@ -1,77 +1,44 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-"""
--------------------------------------------------
-   @File Name:     app.py
-   @Author:        Luyao.zhang
-   @Date:          2023/5/15
-   @Description:
--------------------------------------------------
-"""
-from pathlib import Path
-from PIL import Image
 import streamlit as st
+from PIL import Image
+import torch
+import numpy as np
 
-import config
-from utils import load_model, infer_uploaded_image, infer_uploaded_video, infer_uploaded_webcam
+from streamlit_webrtc import webrtc_streamer, WebRtcMode, RTCConfiguration
+import av
 
-# setting page layout
-st.set_page_config(
-    page_title="Interactive Interface for YOLOv8",
-    page_icon="🤖",
-    layout="wide",
-    initial_sidebar_state="expanded"
-    )
 
-# main page heading
-st.title("Interactive Interface for YOLOv8")
+device = 'cpu'
+if not hasattr(st, 'classifier'):
+    #st.model = torch.hub.load('ultralytics/yolov5', 'yolov5s',  _verbose=False)
+    st.model = torch.hub.load('ultralytics/yolov5', 'custom', path='best.pt', _verbose=False)
+    
 
-# sidebar
-st.sidebar.header("DL Model Config")
 
-# model options
-task_type = st.sidebar.selectbox(
-    "Select Task",
-    ["Detection"]
+RTC_CONFIGURATION = RTCConfiguration(
+    {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
 )
 
-model_type = None
-if task_type == "Detection":
-    model_type = st.sidebar.selectbox(
-        "Select Model",
-        config.DETECTION_MODEL_LIST
-    )
-else:
-    st.error("Currently only 'Detection' function is implemented")
 
-confidence = float(st.sidebar.slider(
-    "Select Model Confidence", 30, 100, 50)) / 100
+class VideoProcessor:
+    def recv(self, frame):
+        img = frame.to_ndarray(format="bgr24")
+        
+        # vision processing
+        flipped = img[:, ::-1, :]
 
-model_path = ""
-if model_type:
-    model_path = Path(config.DETECTION_MODEL_DIR, str(model_type))
-else:
-    st.error("Please Select Model in Sidebar")
+        # model processing
+        im_pil = Image.fromarray(flipped)
+        results = st.model(im_pil, size=112)
+        bbox_img = np.array(results.render()[0])
 
-# load pretrained DL model
-try:
-    model = load_model(model_path)
-except Exception as e:
-    st.error(f"Unable to load model. Please check the specified path: {model_path}")
+        return av.VideoFrame.from_ndarray(bbox_img, format="bgr24")
 
-# image/video options
-st.sidebar.header("Image/Video Config")
-source_selectbox = st.sidebar.selectbox(
-    "Select Source",
-    config.SOURCES_LIST
+
+webrtc_ctx = webrtc_streamer(
+    key="WYH",
+    mode=WebRtcMode.SENDRECV,
+    rtc_configuration=RTC_CONFIGURATION,
+    video_processor_factory=VideoProcessor,
+    media_stream_constraints={"video": True, "audio": False},
+    async_processing=False,
 )
-
-source_img = None
-if source_selectbox == config.SOURCES_LIST[0]: # Image
-    infer_uploaded_image(confidence, model)
-elif source_selectbox == config.SOURCES_LIST[1]: # Video
-    infer_uploaded_video(confidence, model)
-elif source_selectbox == config.SOURCES_LIST[2]: # Webcam
-    infer_uploaded_webcam(confidence, model)
-else:
-    st.error("Currently only 'Image' and 'Video' source are implemented")
